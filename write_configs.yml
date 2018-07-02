@@ -1,0 +1,98 @@
+---
+
+- name: Create workspace folder
+  hosts: localhost
+  gather_facts: no
+  tasks:
+
+    - name: Create workspace folder
+      file:
+        path: ./workspace
+        state: directory
+      when: monitor is not defined
+      tags:
+        - preview
+
+- name: Write Icinga Configs to Workspace
+  hosts: all
+  gather_facts: no
+  connection: local
+  tasks:
+
+    - template:
+        src: hosts.conf
+        dest: ./workspace/{{inventory_hostname}}.conf
+      when: monitor is not defined
+      tags:
+        - preview
+
+- name: Send Icinga Configs to Icinga Servers
+  hosts: icinga
+  gather_facts: no
+  become: yes
+  become_user: root
+  tasks:
+
+    - file:
+        path: /etc/icinga2/conf.d/ark/
+        state: absent
+      tags:
+        - configs
+
+    - file:
+        path: /etc/icinga2/conf.d/ark/
+        recurse: yes
+        state: directory
+      tags:
+        - configs
+
+    - synchronize:
+        src: ./workspace/
+        dest: /etc/icinga2/conf.d/ark/
+      tags:
+        - configs
+
+    - synchronize:
+        src: ./icinga_services/
+        dest: /etc/icinga2/conf.d/ark/
+      tags:
+        - configs
+
+    - synchronize:
+        src: ./scripts/
+        dest: /usr/lib64/nagios/plugins/
+      tags:
+        - scripts
+
+    - command: find /usr/lib64/nagios/plugins/ -type f -exec chcon -u system_u -r object_r -t nagios_unconfined_plugin_exec_t -l s0 {} \;
+      tags:
+        - scripts
+
+    - command: chown -R icinga:icinga /etc/icinga2/conf.d/ark
+      tags:
+        - configs
+
+    - command: find /usr/lib64/nagios/plugins/ -type f -exec chmod 777 {} \;
+      tags:
+        - scripts
+
+    - service:
+        name: icinga2
+        state: reloaded
+      tags:
+        - restart
+        - configs
+
+- name: Erase Icinga Configs from Workspace
+  hosts: localhost
+  gather_facts: no
+  connection: local
+  tasks:
+
+    - name: Wipe out old workspace
+      file:
+        path: ./workspace
+        state: absent
+      when: monitor is not defined
+      tags:
+        - cleanup

@@ -1,0 +1,78 @@
+#!/bin/bash
+
+while test $# -gt 0; do
+        case "$1" in
+                -h|--help)
+                        echo "check_elk - monitor overall ELK stack health"
+                        echo " "
+                        echo "./check_elk [options]"
+                        echo " "
+                        echo "options:"
+                        echo "-h, --help                  show this help message"
+                        echo "-H, --host                  hostname or IP"
+                        echo "-a, --action                check command (index,overall)"
+                        exit 0
+                        ;;
+
+                -H|--host)
+                        shift
+                        host=$1
+                        shift
+                        ;;
+
+                -a|--action)
+                        shift
+                        action=$1
+                        shift
+                        ;;
+
+                *)
+                        shift
+                        echo "$0 is not a valid flag"
+                        exit 3
+                        shift
+                        ;;
+        esac
+done
+
+if [ -z "$host" ] || [ -z "$action" ]; then
+  echo "Missing parameters"
+  exit
+fi
+
+if [ "$action" == "index" ]; then
+
+  not_green=`curl -s -XGET "$host:9200/_cat/indices?v&pretty" | grep open | awk '{print $1}' | grep -v green`
+
+  if [ $(($not_green)) -gt 0 ]; then
+    yellow=`echo "$not_green" | grep -i yellow | wc -l`
+    red=`echo "$not_green" | grep -i yellow | wc -l`
+    if [ $(($red)) == 0 ] && [ $(($yellow)) -gt 0 ]; then
+      echo "WARNING - Some Indexes are Yellow"
+      exit 1
+    elif [ $(($red)) -gt 0 ]; then
+      echo "CRITICAL - Red Indexes Found"
+      exit 2
+    fi
+  fi
+
+  echo "OK - All Green"
+  exit
+
+fi
+
+if [ "$action" == "overall" ]; then
+  status=`curl -s -GET "$host:9200/_cluster/health?pretty=true" | jq .status -r`
+  if [ "$status" == "" ] || [ "$status" == "red" ]; then
+    echo "CRITICAL - Status: $status"
+    exit 2
+  elif [ "$status" == "yellow" ]; then
+    echo "WARNING - Status: $status"
+    exit 1
+  fi
+  echo "OK - Status: $status"
+  exit 0
+fi
+
+echo "UNKNOWN - Command not valid"
+exit 3

@@ -1,0 +1,10 @@
+#!/bin/bash
+
+plugStat=$(sshpass -p "${3}" ssh "${2}"@"${1}" << EOF
+  olStatus all
+  exit
+EOF)
+
+for plug in `echo "$plugStat" | grep Outlet | awk -F ': ' '{print $3}'`; do
+  echo $plug
+done

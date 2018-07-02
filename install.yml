@@ -1,0 +1,190 @@
+---
+- name: Install Icinga2 and IcingaWeb2
+  hosts: all
+  become: yes
+  tasks:
+
+    - name: "Check all requirements are met (1/2)"
+      fail: msg="Ubuntu and RedHat are not fully supported yet"
+      when: ansible_distribution != "CentOS"
+
+    - name: "Check all requirements are met (2/2)"
+      fail: msg="All required variables have not been defined"
+      when:
+        - database_type is not defined
+        - set_enforce is not defined
+
+    - name: Add CentOS RedHat testing repos
+      yum:
+        name: centos-release-scl-rh
+      when: ansible_distribution == "CentOS"
+
+    - name: Install RedHat release repo
+      yum:
+        enablerepo: centos-sclo-rh-testing
+        name: centos-release-scl
+      when: use_php_7 and ansible_distribution == "CentOS"
+
+    - name: Add Icinga Repo
+      yum:
+        name: https://packages.icinga.com/epel/icinga-rpm-release-7-latest.noarch.rpm
+        state: present
+        update_cache: yes
+      when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat"
+
+    - name: Install EPEL-Release
+      yum:
+        name: epel-release
+      when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat"
+
+    - name: Install PHP 7 with MySQL mods
+      yum:
+        name: "{{ item }}"
+      with_items:
+        - "rh-{{ php_version | default('php71') }}-php-fpm"
+        - "rh-{{ php_version | default('php71') }}-php-mysqlnd"
+        - icinga2-ido-mysql
+      when: use_php_7 and "mysqlnd" in database_type and ansible_distribution == "CentOS"
+
+    - name: Install PHP 7 with Postgres mods
+      yum:
+        name: "{{ item }}"
+      with_items:
+        - "rh-{{ php_version | default('php71') }}-php-fpm"
+        - "rh-{{ php_version | default('php71') }}-php-pgsql"
+      when: use_php_7 and "pgsql" in database_type and ansible_distribution == "CentOS"
+
+    - name: Install PHP Packages with MySQL mods
+      yum:
+        name: "{{ item }}"
+      with_items:
+        - php
+        - php-gd
+        - php-ldap
+        - php-mysqlnd
+        - icinga2-ido-mysql
+      when: use_php_7 == false and "mysqlnd" in database_type and (ansible_distribution == "CentOS" or ansible_distribution == "RedHat")
+
+    - name: Install PHP Packages with Postgres mods
+      yum:
+        name: "{{ item }}"
+      with_items:
+        - php
+        - php-gd
+        - php-ldap
+        - php-pgsql
+      when: use_php_7 == false and "pgsql" in database_type and (ansible_distribution == "CentOS" or ansible_distribution == "RedHat")
+
+    - name: Install Required Packges
+      yum:
+        name: "{{ item }}"
+        update_cache: yes
+      with_items:
+        - rsync
+        - icingacli
+        - icinga2
+        - icingaweb2
+        - icinga2-ido-mysql
+        - nagios-plugins-all
+        - nagios-plugins-nrpe
+        - httpd
+        - docker
+        - yajl-devel
+      when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat"
+
+    - name: Install Additional Required Packages
+      yum:
+        name: "{{ item }}"
+      with_lines: cat required_packages
+      when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat"
+
+    - name: Start Docker Daemon
+      service:
+        name: docker
+        enabled: yes
+        state: reloaded
+
+    - name: Run Graphite Container for Graphs
+      command: docker run -d --name graphite --restart=always -p 127.0.0.1:8080:80 -p 127.0.0.1:2003-2004:2003-2004 -p 127.0.0.1:2023-2024:2023-2024 -p 127.0.0.1:8125:8125/udp -p 127.0.0.1:8126:8126 graphiteapp/graphite-statsd
+      ignore_errors: yes
+      when:
+        - graphite is defined
+        - graphite != "no"
+
+    - name: Enable Graphite Feature
+      command: icinga2 feature enable graphite perfdata command
+
+    - name: Write config data to graphite.conf
+      copy:
+        content: |
+          library "perfdata"
+
+          object GraphiteWriter "graphite" {
+            host = "127.0.0.1"
+            port = 2003
+          }
+        dest: /etc/icinga2/features-enabled/graphite.conf
+
+    - name: Restart Icinga to Apply Graphite Feature & Configuration
+      service:
+        name: icinga2
+        state: reloaded
+        enabled: yes
+      when: graphite is defined
+
+    - name: Ensure SELinux is Enabled
+      selinux:
+        state: enforcing
+        policy: targeted
+      when: set_enforce == true and (ansible_distribution == "CentOS" or ansible_distribution == "RedHat")
+
+    - name: We need to ensure that Icinga can connect to LDAP if we need it
+      seboolean:
+        name: httpd_can_connect_ldap
+        persistent: yes
+        state: yes
+      when: set_enforce == true and (ansible_distribution == "CentOS" or ansible_distribution == "RedHat")
+
+    - name: Icinga needs certain packages if SELinux is running
+      yum:
+        name: "{{item}}"
+      with_items:
+        - icingaweb2-selinux
+        - icinga2-selinux
+      when: set_enforce == true and (ansible_distribution == "CentOS" or ansible_distribution == "RedHat")
+
+    - name: Set the PHP-FPM Timezone in php.ini
+      lineinfile:
+        regexp: ";date.timezone ="
+        line: "date.timezone = America/New_York"
+        path: /etc/opt/rh/rh-php71/php.ini
+      when: use_php_7 is defined
+
+    - name: Start and enable httpd
+      service:
+        name: httpd
+        state: reloaded
+        enabled: yes
+
+    - name: Start and enable PHP 7 FPM
+      service:
+        name: "rh-{{ php_version | default('php71') }}-php-fpm.service"
+        state: reloaded
+        enabled: yes
+      when: use_php_7 and ansible_distribution == "CentOS"
+
+    - name: Detect firewalld status
+      service:
+        name: firewalld
+      register: firewalld
+      ignore_errors: yes
+
+    - name: Open port 80 on Firewall
+      firewalld: port=80/tcp permanent=true zone=public state=enabled immediate=true
+      when: firewalld.status.SubState == "running"
+
+    - name: Remove Default Checks
+      shell: |
+        rm -f /etc/icinga2/conf.d/services.conf
+        rm -f /etc/icinga2/conf.d/hosts.conf
+        rm -f /etc/icinga2/conf.d/notifications.conf

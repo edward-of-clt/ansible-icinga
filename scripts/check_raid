@@ -1,0 +1,95 @@
+#!/bin/bash
+# set -x
+
+while test $# -gt 0; do
+        case "$1" in
+                -h|--help)
+                        echo "check_raid - monitor drive health"
+                        echo " "
+                        echo "./check_raid [options]"
+                        echo " "
+                        exit 0
+                        ;;
+
+                -H)
+                        shift
+                        host=$1
+                        shift
+                        ;;
+
+                -u)
+                        shift
+                        username=$1
+                        shift
+                        ;;
+
+                -p)
+                        shift
+                        password=$1
+                        shift
+                        ;;
+
+                *)
+                        shift
+                        echo "$0 is not a valid flag"
+                        exit 3
+                        shift
+                        ;;
+        esac
+done
+
+
+if [ -z $host ]; then
+  echo "A host must be defined. See help (-h, --help) for more information."
+  exit 1
+fi
+
+if [ -z $username ]; then
+  echo -n "Enter username: "
+  read username
+  echo
+fi
+
+if [ -z $password ]; then
+  echo -n "Enter password: "
+  read -s password
+  echo
+fi
+
+powerstate=`curl -Lks -XGET -u "${username}:${password}" https://${host}/redfish/v1/Systems/1 | jq .PowerState -r`
+if [ "$powerstate" == "On" ]; then
+  echo "OK - Host Powered Off"
+  exit 0
+fi
+
+raid_status=$(curl -ks --request GET --url https://${host}/redfish/v1/Systems/1/Storage/HA-RAID  -u "${username}":"${password}")
+
+not_found=$(echo $raid_status | grep '404 - Not Found')
+
+if [ "$not_found" != "" ]; then
+  echo "CRITICAL- 404 Page Found"
+  exit 2
+fi
+
+redfish_error=$(echo $raid_status | jq .error -r)
+
+if [ "$redfish_error" != "null" ]; then
+  echo "CRITICAL- Machine may be turned off"
+  exit 2
+fi
+
+state=`echo "$raid_status" | jq .StorageControllers[].Status.State -r`
+health=`echo "$raid_status" | jq .StorageControllers[].Status.Health -r`
+
+if [ "$state" == "Enabled" ]; then
+  if [ "$health" == "Warning" ]; then
+    echo "WARNING- RAID not in Sync"
+    exit 1
+  elif [ "$health" == "Critical" ]; then
+    echo "CRITICAL- RAID will not sync"
+    exit 2
+  fi
+fi
+
+echo "OK- Everything appears normal"
+exit 0

@@ -1,0 +1,84 @@
+#!/bin/bash
+
+#
+# for the time being, we're going to execute this command using SSH.
+# we will change to NRPE later
+#
+
+ssh_user=$(whoami)
+
+while test $# -gt 0; do
+        case "$1" in
+                -h|--help)
+                        echo "check_rhv_engine - monitor RHV engine health"
+                        echo " "
+                        echo "./check_rhv_engine [options]"
+                        echo " "
+                        echo "options:"
+                        echo "-h, --help                  show this help message"
+                        echo "-H                          the hostname or ip of the host"
+                        echo "-u                          the ssh username"
+                        echo "-a                          action (state, status)"
+                        exit 0
+                        ;;
+
+                -H)
+                        shift
+                        ssh_host=$1
+                        shift
+                        ;;
+
+                -u)
+                        shift
+                        ssh_user=$1
+                        shift
+                        ;;
+
+                -a)
+                        shift
+                        action=$1
+                        shift
+                        ;;
+
+                *)
+                        shift
+                        echo "$0 is not a valid flag"
+                        exit 0
+                        shift
+                        ;;
+        esac
+done
+
+if [ -z $ssh_host ]; then
+  echo "A host must be defined. See help (-h, --help) for more information."
+  exit 1
+fi
+
+if [ "${action}" == "state" ]; then
+
+    engineState=$((`ssh "${ssh_user}"@"$ssh_host" sudo hosted-engine --vm-status | grep 'state=EngineUp' | wc -l`))
+    if [ $engineState -eq 1 ]; then
+      echo "OK - Engine Running"
+      exit 0
+    else
+      echo "CRITICAL - Engine Down"
+      exit 2
+    fi
+
+fi
+
+if [ "${action}" == "status" ]; then
+
+    engineStatus=`ssh "${ssh_user}"@"$ssh_host" -q sudo hosted-engine --vm-status | grep 'Engine status' | awk -F '  :' '{print $2}' | jq .health -r | grep good`
+    if [ "$engineStatus" = "good" ]; then
+      echo "OK - Engine Health: $engineStatus"
+      exit 0
+    else
+      echo "CRITICAL - Engine Health: $engineStatus"
+      exit 2
+    fi
+
+fi
+
+echo "No valid action defined"
+exit 3

@@ -1,0 +1,140 @@
+#!/bin/bash
+# set -x
+
+tolerance=1
+
+while test $# -gt 0; do
+        case "$1" in
+                -h|--help)
+                        echo "check_drives - monitor drive health"
+                        echo " "
+                        echo "./check_drives [options]"
+                        echo " "
+                        echo "options:"
+                        echo "-h, --help                  show this help message"
+                        echo "-d, --drive_count=NUM       specify the number of drives to expect"
+                        exit 0
+                        ;;
+
+                -H)
+                        shift
+                        host=$1
+                        shift
+                        ;;
+
+                -d)
+                        shift
+                        drive_count=$1
+                        shift
+                        ;;
+
+                -u)
+                        shift
+                        username=$1
+                        shift
+                        ;;
+
+                -p)
+                        shift
+                        password=$1
+                        shift
+                        ;;
+
+                -t)
+                        shift
+                        tolerance=$1
+                        shift
+                        ;;
+
+                *)
+                        shift
+                        echo "$0 is not a valid flag"
+                        exit 0
+                        shift
+                        ;;
+        esac
+done
+
+if [ -z $host ]; then
+  echo "A host must be defined. See help (-h, --help) for more information."
+  exit 1
+fi
+
+if [ -z $username ]; then
+  echo -n "Enter username: "
+  read username
+  echo
+fi
+
+if [ -z $password ]; then
+  echo -n "Enter password: "
+  read -s password
+  echo
+fi
+
+powerstate=`curl -Lks -XGET -u "${username}:${password}" https://${host}/redfish/v1/Systems/1 | jq .PowerState -r`
+if [ "$powerstate" != "On" ]; then
+  echo "OK - Host Powered Off"
+  exit 0
+fi
+
+
+if [ -n "$drive_count" ]; then
+
+  curl=`curl -ks -XGET -u "${username}:${password}" https://${host}/redfish/v1/Systems/1/SimpleStorage/1/`
+
+  if [ $((`echo "${curl}" | grep -vi error | wc -l`)) -eq 0 ]; then
+    echo "UNKNOWN- No Disks Found"
+    exit 3
+  fi
+
+  count=$(echo "$curl" | jq .Devices[] | grep Name | wc -l)
+
+  if [ $(($count)) -eq 0 ]; then
+    echo "CRITICAL- No disks found in machine."
+    exit 2
+  elif [ $(($drive_count)) != $(($count)) ]; then
+    missing=$(($drive_count - $count))
+    if [ $(($missing)) -le $(($tolerance)) ]; then
+      echo "WARNING- Expected: ${drive_count} Found: ${count} Tolerance: ${tolerance}"
+      exit 1
+    else
+      echo "CRITICAL- Expected: ${drive_count} Found: ${count} Tolerance: ${tolerance}"
+      exit 2
+    fi
+  else
+    echo "OK- All disks are present. Count: $(($count)) | 'expected'=${count}[drives];${allowed};${tolerance};;"
+    exit 0
+  fi
+
+fi
+
+critical=0
+raw_drives=$(curl -ks --request GET --url https://${host}/redfish/v1/Systems/1/SimpleStorage/1/  -u "${username}":"${password}")
+if [ $((`echo "$raw_drives" | grep -iv error | wc -l`)) -eq 0 ]; then
+    echo "UNKNOWN- No Disks Found"
+    exit 3
+fi
+drives=$(echo "$raw_drives" | jq .Devices[].Status.Health -r)
+for x in "${drives}"; do
+  if [ "${x}" == "Critical" ]; then
+    missing=`echo $drive | awk -F '/' '{print $7}'`
+    echo "CRITICAL- ${missing} is unhealthy"
+    critical=yes
+  elif [ "${diskhealth}" == "Warning" ]; then
+    missing=`echo $drive | awk -F '/' '{print $7}'`
+    echo "WARNING- ${missing} is not usable (yet)"
+    warning=yes
+  fi
+done
+
+if [ "${critical}" == "yes" ]; then
+  exit 2
+else
+  if [ "${warning}" == "yes" ]; then
+    exit 1
+  fi
+fi
+
+echo "OK- All present disks are healthy."
+exit 0
