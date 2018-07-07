@@ -34,13 +34,13 @@
   tasks:
 
     - file:
-        path: /etc/icinga2/conf.d/ark/
+        path: /etc/icinga2/conf.d/ansible/
         state: absent
       tags:
         - configs
 
     - file:
-        path: /etc/icinga2/conf.d/ark/
+        path: /etc/icinga2/conf.d/ansible/
         recurse: yes
         state: directory
       tags:
@@ -48,13 +48,13 @@
 
     - synchronize:
         src: ./workspace/
-        dest: /etc/icinga2/conf.d/ark/
+        dest: /etc/icinga2/conf.d/ansible/
       tags:
         - configs
 
     - synchronize:
         src: ./icinga_services/
-        dest: /etc/icinga2/conf.d/ark/
+        dest: /etc/icinga2/conf.d/ansible/
       tags:
         - configs
 
@@ -68,7 +68,7 @@
       tags:
         - scripts
 
-    - command: chown -R icinga:icinga /etc/icinga2/conf.d/ark
+    - command: chown -R icinga:icinga /etc/icinga2/conf.d/ansible
       tags:
         - configs
 
